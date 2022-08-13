@@ -11,7 +11,7 @@
 
 
 
-int main(){
+int main(void){
 	nrf24l01_pins_t pins={
 		0,
 		1,
