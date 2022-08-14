@@ -1,5 +1,6 @@
 #include <hardware/gpio.h>
 #include <hardware/spi.h>
+#include <hardware/structs/systick.h>
 #include <nrf24l01.h>
 #include <nrf24l01_constants.h>
 #include <pico/bootrom.h>
@@ -13,32 +14,15 @@
 		sleep_us(5); \
 	} while (0)
 
-#define PAYLOAD_SIZE 8
-
-
-
-static uint8_t _get_status(const nrf24l01_pins_t* pins){
-	uint8_t command=COMMAND_NOP;
-	uint8_t status;
-	spi_init(pins->spi,10000000);
-	spi_set_format(pins->spi,8,SPI_CPOL_0,SPI_CPHA_0,SPI_MSB_FIRST);
-	SET_CSN(pins,0);
-	spi_write_read_blocking(pins->spi,&command,&status,1);
-	SET_CSN(pins,1);
-	spi_deinit(pins->spi);
-	return status;
-}
+#define PAYLOAD_SIZE 4
 
 
 
 static void _write_command(const nrf24l01_pins_t* pins,uint8_t command){
 	uint8_t status;
-	spi_init(pins->spi,10000000);
-	spi_set_format(pins->spi,8,SPI_CPOL_0,SPI_CPHA_0,SPI_MSB_FIRST);
 	SET_CSN(pins,0);
 	spi_write_read_blocking(pins->spi,&command,&status,1);
 	SET_CSN(pins,1);
-	spi_deinit(pins->spi);
 }
 
 
@@ -46,12 +30,9 @@ static void _write_command(const nrf24l01_pins_t* pins,uint8_t command){
 static void _write_register(const nrf24l01_pins_t* pins,uint8_t regsiter,uint8_t value){
 	uint8_t write_buffer[2]={COMMAND_W_REGISTER|regsiter,value};
 	uint8_t read_buffer[2];
-	spi_init(pins->spi,10000000);
-	spi_set_format(pins->spi,8,SPI_CPOL_0,SPI_CPHA_0,SPI_MSB_FIRST);
 	SET_CSN(pins,0);
 	spi_write_read_blocking(pins->spi,write_buffer,read_buffer,2);
 	SET_CSN(pins,1);
-	spi_deinit(pins->spi);
 }
 
 
@@ -59,12 +40,9 @@ static void _write_register(const nrf24l01_pins_t* pins,uint8_t regsiter,uint8_t
 static void _write_register_address(const nrf24l01_pins_t* pins,uint8_t regsiter,nrf24l01_id_t address){
 	uint8_t write_buffer[6]={COMMAND_W_REGISTER|regsiter,address,address>>8,address>>16,address>>24,address>>32};
 	uint8_t read_buffer[6];
-	spi_init(pins->spi,10000000);
-	spi_set_format(pins->spi,8,SPI_CPOL_0,SPI_CPHA_0,SPI_MSB_FIRST);
 	SET_CSN(pins,0);
 	spi_write_read_blocking(pins->spi,write_buffer,read_buffer,6);
 	SET_CSN(pins,1);
-	spi_deinit(pins->spi);
 }
 
 
@@ -80,25 +58,34 @@ static void _init_pins(const nrf24l01_pins_t* pins){
 	gpio_put(pins->ce,0);
 	gpio_put(pins->csn,1);
 	sleep_ms(5);
+	spi_init(pins->spi,10000000);
+	spi_set_format(pins->spi,8,SPI_CPOL_0,SPI_CPHA_0,SPI_MSB_FIRST);
 }
 
 
 
 void nrf24l01_antena_broadcast(const nrf24l01_antena_t* antena){
-	uint64_t time=to_us_since_boot(get_absolute_time());
 	uint8_t write_buffer[PAYLOAD_SIZE+1]={COMMAND_W_TX_PAYLOAD};
-	*((uint64_t*)(write_buffer+1))=time;
 	uint8_t read_buffer[PAYLOAD_SIZE+1];
-	spi_init(antena->pins.spi,10000000);
-	spi_set_format(antena->pins.spi,8,SPI_CPOL_0,SPI_CPHA_0,SPI_MSB_FIRST);
-	SET_CSN(&(antena->pins),0);
-	spi_write_read_blocking(antena->pins.spi,write_buffer,read_buffer,PAYLOAD_SIZE+1);
-	SET_CSN(&(antena->pins),1);
-	spi_deinit(antena->pins.spi);
-	gpio_put(antena->pins.ce,1);
-	while (!(_get_status(&(antena->pins))&(BIT_TX_DS|BIT_MAX_RT)));
-	gpio_put(antena->pins.ce,0);
-	_write_register(&(antena->pins),REGISTER_STATUS,BIT_RX_DR|BIT_TX_DS|BIT_MAX_RT);
+	uint8_t status_clear_command_buffer[2]={COMMAND_W_REGISTER|REGISTER_STATUS,BIT_RX_DR|BIT_TX_DS|BIT_MAX_RT};
+	uint8_t command=COMMAND_NOP;
+	uint8_t status;
+	while (1){
+		*((uint32_t*)(write_buffer+1))=systick_hw->cvr;
+		SET_CSN(&(antena->pins),0);
+		spi_write_read_blocking(antena->pins.spi,write_buffer,read_buffer,PAYLOAD_SIZE+1);
+		SET_CSN(&(antena->pins),1);
+		gpio_put(antena->pins.ce,1);
+		do{
+			SET_CSN(&(antena->pins),0);
+			spi_write_read_blocking(antena->pins.spi,&command,&status,1);
+			SET_CSN(&(antena->pins),1);
+		} while (!(status&(BIT_TX_DS|BIT_MAX_RT)));
+		gpio_put(antena->pins.ce,0);
+		SET_CSN(&(antena->pins),0);
+		spi_write_read_blocking(antena->pins.spi,status_clear_command_buffer,read_buffer,2);
+		SET_CSN(&(antena->pins),1);
+	}
 }
 
 
@@ -166,17 +153,30 @@ void nrf24l01_receiver_init(const nrf24l01_pins_t* pins,nrf24l01_id_t message_id
 
 
 void nrf24l01_receiver_update(const nrf24l01_receiver_t* receiver){
-	if (_get_status(&(receiver->pins))&BIT_RX_DR){
+	uint8_t command=COMMAND_NOP;
+	uint8_t status;
+	SET_CSN(&(receiver->pins),0);
+	spi_write_read_blocking(receiver->pins.spi,&command,&status,1);
+	SET_CSN(&(receiver->pins),1);
+	if (status&BIT_RX_DR){
 		uint8_t write_buffer[PAYLOAD_SIZE+1]={COMMAND_R_RX_PAYLOAD};
 		uint8_t read_buffer[PAYLOAD_SIZE+1];
-		spi_init(receiver->pins.spi,10000000);
-		spi_set_format(receiver->pins.spi,8,SPI_CPOL_0,SPI_CPHA_0,SPI_MSB_FIRST);
 		SET_CSN(&(receiver->pins),0);
 		spi_write_read_blocking(receiver->pins.spi,write_buffer,read_buffer,PAYLOAD_SIZE+1);
+		uint32_t time=*((uint32_t*)(read_buffer+1));
 		SET_CSN(&(receiver->pins),1);
-		spi_deinit(receiver->pins.spi);
-		_write_register(&(receiver->pins),REGISTER_STATUS,BIT_RX_DR);
-		uint64_t time=*((uint64_t*)(read_buffer+1));
-		printf("%llu\n",time);
+		write_buffer[0]=COMMAND_W_REGISTER|REGISTER_STATUS;
+		write_buffer[1]=BIT_RX_DR;
+		SET_CSN(&(receiver->pins),0);
+		spi_write_read_blocking(receiver->pins.spi,write_buffer,read_buffer,2);
+		SET_CSN(&(receiver->pins),1);
+		time=(time-systick_hw->cvr)&0xffffff;
+		static uint32_t last=0;
+		last=(last*9+time)/10;
+		static uint8_t tick=0;
+		tick++;
+		if (!tick){
+			printf("%u\n",last);
+		}
 	}
 }

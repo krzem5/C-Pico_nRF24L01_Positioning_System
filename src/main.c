@@ -1,4 +1,6 @@
+#include <hardware/clocks.h>
 #include <hardware/spi.h>
+#include <hardware/structs/systick.h>
 #include <nrf24l01.h>
 #include <pico/bootrom.h>
 #include <pico/stdlib.h>
@@ -12,6 +14,8 @@
 
 
 int main(void){
+	systick_hw->csr=0x5;
+	systick_hw->rvr=0x00ffffff;
 	nrf24l01_pins_t pins={
 		0,
 		1,
@@ -23,10 +27,7 @@ int main(void){
 #if TYPE==0
 	nrf24l01_antena_t antena;
 	nrf24l01_antena_init(&pins,MESSAGE_ID,CHANNEL,&antena);
-	while (1){
-		nrf24l01_antena_broadcast(&antena);
-		sleep_ms(1);
-	}
+	nrf24l01_antena_broadcast(&antena);
 #else
 	stdio_init_all();
 	stdio_usb_init();
@@ -37,4 +38,5 @@ int main(void){
 	}
 	reset_usb_boot(0,0);
 #endif
+	return 0;
 }
