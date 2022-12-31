@@ -44,11 +44,11 @@ typedef struct _NRF24L01_RECEIVER{
 
 
 
-void nrf24l01_antena_broadcast(const nrf24l01_antena_t* antena);
-
-
-
 void nrf24l01_antena_init(const nrf24l01_pins_t* pins,nrf24l01_id_t message_id,nrf24l01_channel_t channel,nrf24l01_antena_t* antena);
+
+
+
+void nrf24l01_antena_update(const nrf24l01_antena_t* antena);
 
 
 

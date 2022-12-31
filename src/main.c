@@ -9,7 +9,7 @@
 
 #define CHANNEL 12
 #define MESSAGE_ID 0x3132313231
-#define TYPE 1
+#define TYPE 0
 
 
 
@@ -27,7 +27,9 @@ int main(void){
 #if TYPE==0
 	nrf24l01_antena_t antena;
 	nrf24l01_antena_init(&pins,MESSAGE_ID,CHANNEL,&antena);
-	nrf24l01_antena_broadcast(&antena);
+	while (1){
+		nrf24l01_antena_update(&antena);
+	}
 #else
 	stdio_init_all();
 	stdio_usb_init();
